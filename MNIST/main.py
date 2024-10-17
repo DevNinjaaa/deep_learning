@@ -22,21 +22,19 @@ loader = {
 class CNN(nn.Module):
     def __init__(self):
         super(CNN, self).__init__()
-        self.convl1 = nn.Conv2d(1, 10, kernel_size=3, padding=1)  # Smaller kernel size
-        self.convl2 = nn.Conv2d(10, 20, kernel_size=3, padding=1) # Smaller kernel size
-        self.convl3 = nn.Conv2d(20, 30, kernel_size=3, padding=1) # Smaller kernel size
-        self.convl3_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(30 * 3 * 3, 50)  # Adjusted input size for fully connected layer
-        self.fc2 = nn.Linear(50, 10)           # Final output layer
+        self.convl1 = nn.Conv2d(1, 10, kernel_size=5)
+        self.convl2 = nn.Conv2d(10, 20, kernel_size=5)
+        self.convl2_drop = nn.Dropout2d()
+        self.fc1 = nn.Linear(320, 50)
+        self.fc2 = nn.Linear(50, 10)
 
     def forward(self, X):
         X = F.relu(F.max_pool2d(self.convl1(X), 2))  # Convolution 1 with max pooling
-        X = F.relu(F.max_pool2d(self.convl2(X), 2))  # Convolution 2 with max pooling
-        X = F.relu(F.max_pool2d(self.convl3_drop(self.convl3(X)), 2))  # Convolution 3 with dropout and max pooling
-        X = X.view(-1, 30 * 3 * 3)  # Adjust based on output size after conv layers
-        X = F.relu(self.fc1(X))      # First fully connected layer
+        X = F.relu(F.max_pool2d(self.convl2_drop(self.convl2(X)), 2))  # Convolution 2 with dropout and max pooling
+        X = X.view(-1, 320)  # Flatten the output
+        X = F.relu(self.fc1(X))  # First fully connected layer
         X = F.dropout(X, training=self.training)  # Dropout for regularization
-        X = self.fc2(X)              # Final fully connected layer (logits)
+        X = self.fc2(X)  # Final fully connected layer (logits)
 
         return X  # Return raw logits
 
@@ -46,7 +44,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Model, optimizer, and loss function
 model = CNN().to(device)
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 loss_fn = nn.CrossEntropyLoss()
 
 # Training function
