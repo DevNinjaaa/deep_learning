@@ -1,92 +1,79 @@
 import numpy as np
-import torch
-import torch.optim as optim
-import torch.nn as nn
-import torch.nn.functional as F
-from torchvision import datasets
-from torchvision.transforms import ToTensor
-import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader
+from sklearn.datasets import fetch_openml
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import accuracy_score
 
-# Loading the MNIST dataset
-train_data = datasets.MNIST(root='data', train=True, transform=ToTensor(), download=True)
-test_data = datasets.MNIST(root='data', train=False, transform=ToTensor(), download=True)
+# Load and prepare the MNIST dataset
+mnist = fetch_openml('mnist_784', version=1)
+X, Y = mnist.data, mnist.target.astype(int)
+X = X / 255.0  # Normalize the data
 
-# DataLoader for batching and shuffling
-loader = {
-    'train': DataLoader(train_data, batch_size=100, shuffle=True, num_workers=0),
-    'test': DataLoader(test_data, batch_size=100, shuffle=True, num_workers=0),
-}
+# Split into training and testing sets
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
 
-# CNN model definition
-class CNN(nn.Module):
-    def __init__(self):
-        super(CNN, self).__init__()
-        self.convl1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.convl2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.convl2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(320, 50)
-        self.fc2 = nn.Linear(50, 10)
+# One-hot encode labels for Y_train
+one_hot_encoder = OneHotEncoder(sparse_output=False)
+Y_train_one_hot = one_hot_encoder.fit_transform(np.array(Y_train).reshape(-1, 1))
 
-    def forward(self, X):
-        X = F.relu(F.max_pool2d(self.convl1(X), 2))  # Convolution 1 with max pooling
-        X = F.relu(F.max_pool2d(self.convl2_drop(self.convl2(X)), 2))  # Convolution 2 with dropout and max pooling
-        X = X.view(-1, 320)  # Flatten the output
-        X = F.relu(self.fc1(X))  # First fully connected layer
-        X = F.dropout(X, training=self.training)  # Dropout for regularization
-        X = self.fc2(X)  # Final fully connected layer (logits)
+def relu(z):
+    return np.maximum(0, z)
 
-        return X  # Return raw logits
+def d_relu(z):
+    return (z > 0).astype(float)
 
+def softmax(z):
+    exp_z = np.exp(z - np.max(z, axis=1, keepdims=True))
+    return exp_z / np.sum(exp_z, axis=1, keepdims=True)
 
-# Set device for model training
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def cross_entropy_loss(y_true, y_pred):
+    y_pred = np.clip(y_pred, 1e-10, 1 - 1e-10)
+    return -np.sum(y_true * np.log(y_pred)) / y_true.shape[0]
 
-# Model, optimizer, and loss function
-model = CNN().to(device)
-optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-loss_fn = nn.CrossEntropyLoss()
+class NeuralNetwork:
+    def __init__(self, X, Y, neurons):
+        self.input = X
+        self.Y = Y
+        self.weightOne = np.random.randn(self.input.shape[1], neurons) * np.sqrt(2. / self.input.shape[1])
+        self.weightTwo = np.random.randn(neurons, 10) * np.sqrt(2. / neurons)
+        self.output = np.zeros(self.Y.shape)
+        self.learning_rate = 0.01
 
-# Training function
-def train(epoch):
-    model.train()
-    for batch_idx, (data, target) in enumerate(loader['train']):
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = loss_fn(output, target)
-        loss.backward()
-        optimizer.step()
-        if batch_idx % 20 == 0:
-            print(f'Epoch: {epoch}, Batch: {batch_idx}, Loss: {loss.item()}')
+    def feedforward(self):
+        self.layer1 = relu(np.dot(self.input, self.weightOne))
+        self.output = softmax(np.dot(self.layer1, self.weightTwo))
 
-def test():
-    model.eval()
-    test_loss = 0
-    correct = 0
-    with torch.no_grad():
-        for data, target in loader['test']:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            test_loss += loss_fn(output, target).item()
-            pred = output.argmax(dim=1, keepdim=True)
-            correct += pred.eq(target.view_as(pred)).sum().item()
-    test_loss /= len(loader['test'])  # Average over the number of batches
-    print(f'Test Loss: {test_loss:.4f}, Accuracy: {100. * correct / len(loader["test"].dataset):.2f}%')
+    def backpropagation(self):
+        error = self.output - self.Y  # Cross-entropy error
+        d_weightTwo = np.dot(self.layer1.T, error)  # Gradient for second weight matrix
+        d_weightOne = np.dot(self.input.T, np.dot(error, self.weightTwo.T) * d_relu(self.layer1))  # Gradient for first weight matrix
 
-# Training and testing
-train(1)
-test()
+        # Gradient clipping
+        np.clip(d_weightOne, -1, 1, out=d_weightOne)
+        np.clip(d_weightTwo, -1, 1, out=d_weightTwo)
 
-# Model evaluation and prediction on a single image
-model.eval()
-data, target = test_data[0]
-data = data.unsqueeze(0).to(device)  # Adding batch dimension
-output = model(data)
-prediction = output.argmax(dim=1, keepdim=True).item()  # Get predicted label
-print(prediction)
+        # Update weights
+        self.weightOne -= d_weightOne * self.learning_rate
+        self.weightTwo -= d_weightTwo * self.learning_rate
 
-# Displaying the image
-image = data.squeeze(0).squeeze(0).cpu().numpy()
-plt.imshow(image, cmap='gray')
-plt.show()
+    def predict(self, X):
+        layer1 = relu(np.dot(X, self.weightOne))
+        output = softmax(np.dot(layer1, self.weightTwo))
+        return np.argmax(output, axis=1)  # Return class with highest probability
+
+# Initialize and train the network
+nn = NeuralNetwork(X_train, Y_train_one_hot, neurons=128)
+
+# Training loop
+for i in range(10000):
+    nn.feedforward()
+    nn.backpropagation()
+    loss = cross_entropy_loss(Y_train_one_hot, nn.output)
+    train_pred = nn.predict(X_train)
+    train_accuracy = accuracy_score(Y_train, train_pred)
+    print(f"Epoch {i}, Loss: {loss:.4f}, Training Accuracy: {train_accuracy * 100:.2f}%")
+
+# Test the network
+Y_pred = nn.predict(X_test)
+accuracy = accuracy_score(Y_test, Y_pred)
+print(f"Test Accuracy: {accuracy * 100:.2f}%")
